@@ -1,0 +1,6 @@
+bin/
+myra-dyn
+vendor/
+glide.lock
+go.sum
+Gopkg.lock

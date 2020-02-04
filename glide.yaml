@@ -1,0 +1,4 @@
+package: myracloud.com/myra-dyn
+import:
+- package: github.com/Myra-Security-GmbH/signature
+- package: gopkg.in/yaml.v2
