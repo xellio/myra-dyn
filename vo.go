@@ -63,8 +63,11 @@ type DNSRecordVO struct {
 // UpstreamOptions ...
 //
 type UpstreamOptions struct {
-	Backup bool `json:"backup"`
-	Down   bool `json:"down"`
+	Backup      bool   `json:"backup"`
+	Down        bool   `json:"down"`
+	FailTimeout string `json:"failTimeout"`
+	MaxFails    int    `json:"maxFails"`
+	Weight      int    `json:"weight"`
 }
 
 //
