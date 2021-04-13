@@ -9,7 +9,6 @@ import (
 	"log"
 	"net"
 	"net/http"
-	"os"
 	"strings"
 	"sync"
 
@@ -55,6 +54,12 @@ func init() {
 	flag.StringVar(&configFile, "c", defaultConfigFile, usageShort)
 
 	flag.Parse()
+}
+
+//
+// main function
+//
+func main() {
 
 	data, err := ioutil.ReadFile(configFile)
 	if err != nil {
@@ -67,13 +72,8 @@ func init() {
 		help(err)
 		return
 	}
-}
 
-//
-// main function
-//
-func main() {
-	domains := os.Args[1:]
+	domains := flag.Args()
 	if len(domains) == 0 {
 		help(errors.New("missing domain(s)"))
 		return
