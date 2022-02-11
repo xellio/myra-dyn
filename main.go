@@ -1,16 +1,17 @@
 package main
 
 import (
-	"encoding/json"
 	"errors"
 	"flag"
 	"fmt"
 	"io/ioutil"
 	"log"
 	"net"
-	"net/http"
 	"strings"
 	"sync"
+	"time"
+
+	myrasec "github.com/Myra-Security-GmbH/myrasec-go"
 
 	yaml "gopkg.in/yaml.v2"
 )
@@ -33,12 +34,21 @@ const (
 	LANG = "en"
 )
 
+const (
+	// RecordTypeA ...
+	RecordTypeA = "A"
+	// RecordTypeAAAA ...
+	RecordTypeAAAA = "AAAA"
+)
+
 //
 // config ...
 //
 var config *configuration
 
 var configFile string
+
+var api *myrasec.API
 
 //
 // init ...
@@ -79,6 +89,12 @@ func main() {
 		return
 	}
 
+	api, err = myrasec.New(config.APIKey, config.Secret)
+	if err != nil {
+		help(err)
+		return
+	}
+
 	ip, err := GetOwnIP(config.DialAddress)
 	if err != nil {
 		log.Println("ERROR", err)
@@ -100,20 +116,26 @@ func main() {
 			}
 			wg.Add(1)
 
-			go func(record *DNSRecordVO, domainName string) {
+			go func(record myrasec.DNSRecord, domainName string) {
 				defer func() {
 					wg.Done()
 				}()
-				resultVO, err := record.Update(ip, domainName)
-				if err != nil {
-					log.Println("ERROR", err)
-					return
+
+				log.Printf("Update %s to %s for DNSRecord %s-%s\n", record.Value, ip.String(), record.Name, record.RecordType)
+
+				record.Value = ip.String()
+
+				if ip.To4() == nil {
+					record.RecordType = RecordTypeAAAA
+				} else {
+					record.RecordType = RecordTypeA
 				}
 
-				if resultVO.Error {
-					for _, violation := range resultVO.ViolationList {
-						log.Println("RESPONSE-ERROR", record.Name, violation.Message)
-					}
+				record.Comment = fmt.Sprintf("myra-dyn update from %s to %s at %s", record.Value, ip.String(), time.Now().Format(time.RFC3339))
+
+				_, err = api.UpdateDNSRecord(&record, domainName)
+				if err != nil {
+					log.Println("ERROR", err)
 				}
 
 			}(dnsRecords[0], domainName)
@@ -126,66 +148,35 @@ func main() {
 //
 // fetchResults calls fetch function vor every passed domain and returns a map containing records which require an update
 //
-func fetchResults(domains []string, ip net.IP) (map[string]map[string][]*DNSRecordVO, error) {
-	resultMap := make(map[string]map[string][]*DNSRecordVO)
+func fetchResults(domains []string, ip net.IP) (map[string]map[string][]myrasec.DNSRecord, error) {
+	resultMap := make(map[string]map[string][]myrasec.DNSRecord)
 
+	recordTypes := strings.Join([]string{RecordTypeA, RecordTypeAAAA}, ",")
+	params := map[string]string{
+		"recordTypes": recordTypes,
+		"activeOnly":  "true",
+		"pageSize":    "1000",
+	}
 	for _, domain := range domains {
-		resultMap[domain] = make(map[string][]*DNSRecordVO)
+		resultMap[domain] = make(map[string][]myrasec.DNSRecord)
 
-		queryVO, err := fetch(domain)
+		records, err := api.ListDNSRecords(domain, params)
 		if err != nil {
 			return resultMap, err
 		}
 
-		for _, itm := range queryVO.List {
-			if itm.Value == ip.String() {
-				log.Printf("INFO: No change required for %s (%s)\n", itm.Name, itm.Value)
+		for _, rec := range records {
+			if rec.Value == ip.String() {
+				log.Printf("INFO: No change required for %s (%s)\n", rec.Name, rec.Value)
 				continue
 			}
-			resultMap[domain][itm.Name] = append(resultMap[domain][itm.Name], itm)
+
+			resultMap[domain][rec.Name] = append(resultMap[domain][rec.Name], rec)
 		}
 	}
 
 	return resultMap, nil
 
-}
-
-//
-// fetch exising A and AAAA DNS records for the given domainName
-//
-func fetch(domainName string) (QueryVO, error) {
-	queryVO := QueryVO{}
-
-	recordTypes := strings.Join([]string{RecordTypeA, RecordTypeAAAA}, ",")
-	request, err := buildGETRequest(GETUrl(domainName), map[string]string{
-		"recordTypes": recordTypes,
-		"activeOnly":  "true",
-	})
-	if err != nil {
-		return queryVO, err
-	}
-
-	client := &http.Client{}
-	resp, err := client.Do(request)
-	if err != nil {
-		return queryVO, err
-	}
-	defer func() {
-		derr := resp.Body.Close()
-		if derr != nil {
-			log.Println(derr)
-		}
-	}()
-
-	if resp.StatusCode != http.StatusOK {
-
-		fmt.Println(resp)
-
-		return queryVO, errors.New("unable to fetch data")
-	}
-
-	err = json.NewDecoder(resp.Body).Decode(&queryVO)
-	return queryVO, err
 }
 
 func help(err error) {
