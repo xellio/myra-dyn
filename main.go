@@ -11,7 +11,7 @@ import (
 	"sync"
 	"time"
 
-	myrasec "github.com/Myra-Security-GmbH/myrasec-go"
+	myrasec "github.com/Myra-Security-GmbH/myrasec-go/v2"
 
 	yaml "gopkg.in/yaml.v2"
 )
@@ -26,13 +26,6 @@ type configuration struct {
 	Language    string `yaml:"language"`
 	DialAddress string `yaml:"ipdetection"`
 }
-
-const (
-	// APIHost ...
-	APIHost = "api.myracloud.com"
-	// LANG ...
-	LANG = "en"
-)
 
 const (
 	// RecordTypeA ...
@@ -94,6 +87,7 @@ func main() {
 		help(err)
 		return
 	}
+	api.UserAgent = "myra-dyn"
 
 	ip, err := GetOwnIP(config.DialAddress)
 	if err != nil {
@@ -108,7 +102,7 @@ func main() {
 
 	var wg sync.WaitGroup
 
-	for domainName, records := range results {
+	for domainID, records := range results {
 		for dnsName, dnsRecords := range records {
 			if len(dnsRecords) > 1 {
 				log.Printf("WARNING: Skipping update on %s: More than one A or AAAA record found\n", dnsName)
@@ -116,7 +110,7 @@ func main() {
 			}
 			wg.Add(1)
 
-			go func(record myrasec.DNSRecord, domainName string) {
+			go func(record myrasec.DNSRecord, domainID int) {
 				defer func() {
 					wg.Done()
 				}()
@@ -133,12 +127,12 @@ func main() {
 
 				record.Comment = fmt.Sprintf("myra-dyn update from %s to %s at %s", record.Value, ip.String(), time.Now().Format(time.RFC3339))
 
-				_, err = api.UpdateDNSRecord(&record, domainName)
+				_, err = api.UpdateDNSRecord(&record, domainID)
 				if err != nil {
 					log.Println("ERROR", err)
 				}
 
-			}(dnsRecords[0], domainName)
+			}(dnsRecords[0], domainID)
 		}
 	}
 	wg.Wait()
@@ -148,8 +142,8 @@ func main() {
 //
 // fetchResults calls fetch function vor every passed domain and returns a map containing records which require an update
 //
-func fetchResults(domains []string, ip net.IP) (map[string]map[string][]myrasec.DNSRecord, error) {
-	resultMap := make(map[string]map[string][]myrasec.DNSRecord)
+func fetchResults(domains []string, ip net.IP) (map[int]map[string][]myrasec.DNSRecord, error) {
+	resultMap := make(map[int]map[string][]myrasec.DNSRecord)
 
 	recordTypes := strings.Join([]string{RecordTypeA, RecordTypeAAAA}, ",")
 	params := map[string]string{
@@ -158,9 +152,20 @@ func fetchResults(domains []string, ip net.IP) (map[string]map[string][]myrasec.
 		"pageSize":    "1000",
 	}
 	for _, domain := range domains {
-		resultMap[domain] = make(map[string][]myrasec.DNSRecord)
 
-		records, err := api.ListDNSRecords(domain, params)
+		domains, err := api.ListDomains(map[string]string{"search": domain})
+		if err != nil {
+			return resultMap, err
+		}
+
+		if len(domains) != 1 {
+			return resultMap, fmt.Errorf("Expected to fetch a single domain")
+		}
+
+		domain := domains[0]
+		resultMap[domain.ID] = make(map[string][]myrasec.DNSRecord)
+
+		records, err := api.ListDNSRecords(domain.ID, params)
 		if err != nil {
 			return resultMap, err
 		}
@@ -171,7 +176,7 @@ func fetchResults(domains []string, ip net.IP) (map[string]map[string][]myrasec.
 				continue
 			}
 
-			resultMap[domain][rec.Name] = append(resultMap[domain][rec.Name], rec)
+			resultMap[domain.ID][rec.Name] = append(resultMap[domain.ID][rec.Name], rec)
 		}
 	}
 
